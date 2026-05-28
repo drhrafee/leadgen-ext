@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>leadgen</title>
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="logo-area">
+        <svg class="logo-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M12 2L2 7L12 12L22 7L12 2Z" fill="url(#grad1)" />
+          <path d="M2 17L12 22L22 17" stroke="url(#grad1)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+          <path d="M2 12L12 17L22 12" stroke="url(#grad1)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+          <defs>
+            <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" style="stop-color:#38bdf8;stop-opacity:1" />
+              <stop offset="100%" style="stop-color:#818cf8;stop-opacity:1" />
+            </linearGradient>
+          </defs>
+        </svg>
+        <span class="logo-text">leadgen</span>
+      </div>
+      
+      <!-- Tab Navigation -->
+      <nav class="tab-navigation">
+        <button id="tab-btn-scrape" class="tab-btn active" data-tab="scrape">Scraper</button>
+        <button id="tab-btn-integration" class="tab-btn" data-tab="integration">Integrate</button>
+      </nav>
+    </header>
+
+    <!-- Main Content Area -->
+    <main class="app-content">
+      <!-- Scrape View -->
+      <div id="tab-view-scrape" class="tab-view active">
+        <!-- Controls -->
+        <div class="control-panel">
+          <button id="btn-scrape" class="action-btn submit-btn">
+            <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+            <span>Scrape Current Page</span>
+            <div class="spinner hidden" id="scrape-spinner"></div>
+          </button>
+          
+          <button id="btn-export-csv" class="action-btn secondary-btn" disabled>
+            <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+            Export to CSV
+          </button>
+        </div>
+
+        <!-- Dashboard Stats -->
+        <div class="stats-card">
+          <span class="stats-label">Leads Detected</span>
+          <span id="leads-count" class="stats-number">0</span>
+        </div>
+
+        <!-- Table Preview Area -->
+        <div class="preview-section">
+          <h3>Extracted Preview</h3>
+          <div class="table-wrapper">
+            <table id="preview-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Phone</th>
+                  <th>Website</th>
+                </tr>
+              </thead>
+              <tbody id="preview-body">
+                <tr class="empty-row">
+                  <td colspan="3">No leads scraped yet. Open Google Maps or Search results and click Scrape.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Integration View -->
+      <div id="tab-view-integration" class="tab-view">
+        <h2 class="section-title">Webhook Push (n8n)</h2>
+        <p class="section-desc">Optionally push all scraped leads automatically to an n8n webhook workflow.</p>
+        
+        <form id="integration-form" class="settings-form">
+          <div class="form-group">
+            <label for="settings-webhook">n8n Webhook URL</label>
+            <input type="url" id="settings-webhook" placeholder="https://primary-n8n.domain.com/webhook/..." autocomplete="off">
+            <small class="help-text">Leave blank to disable. If configured, you can push scraped leads straight to n8n.</small>
+          </div>
+
+          <div class="form-group-row">
+            <button type="submit" id="btn-save-integration" class="action-btn secondary-btn">
+              Save Integration
+            </button>
+            <button type="button" id="btn-push-n8n" class="action-btn secondary-btn" disabled>
+              Push Scraped Leads
+            </button>
+          </div>
+        </form>
+
+        <div class="status-indicator">
+          <div class="indicator-dot" id="webhook-status-dot"></div>
+          <span id="webhook-status-text">Webhook not configured</span>
+        </div>
+      </div>
+    </main>
+
+    <!-- Footer Toast Messages -->
+    <div id="toast" class="toast hidden"></div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

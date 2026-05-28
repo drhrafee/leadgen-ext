@@ -10,6 +10,13 @@ chrome.runtime.onInstalled.addListener(() => {
   console.log("leadgen extension installed and context menus created.");
 });
 
+// Configure Side Panel behavior in Manifest V3
+if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) {
+  chrome.sidePanel
+    .setPanelBehavior({ openPanelOnActionClick: true })
+    .catch((error) => console.error("Error setting panel behavior:", error));
+}
+
 // Handle context menu clicks
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId === "sendToN8N") {

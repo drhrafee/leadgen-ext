@@ -302,40 +302,102 @@ function scrapeGoogleSearch() {
         socialMedia: "N/A"
       });
     });
-  }
+// Helper to auto-scroll Google Maps listings feed to load more listings
+async function autoScrollGoogleMaps(maxResults = 50) {
+  console.log(`Auto-scrolling Google Maps feed up to ${maxResults} results...`);
   
-  return listings;
+  const feed = document.querySelector('div[role="feed"]');
+  if (!feed) {
+    console.warn("Could not find scrollable feed pane (div[role='feed'])");
+    return;
+  }
+
+  let lastHeight = feed.scrollHeight;
+  let noChangeCount = 0;
+  const maxNoChange = 6; // Stop if scroll height doesn't change after 6 scroll checks (~9s)
+  
+  while (true) {
+    const links = feed.querySelectorAll('a[href*="/maps/place/"]');
+    if (links.length >= maxResults) {
+      console.log(`Loaded ${links.length} listings. Reached requested limit of ${maxResults}.`);
+      break;
+    }
+
+    // Scroll container to bottom
+    feed.scrollTo(0, feed.scrollHeight);
+    
+    // Wait for DOM items to load (1.5 seconds)
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    
+    const newHeight = feed.scrollHeight;
+    if (newHeight === lastHeight) {
+      noChangeCount++;
+      if (noChangeCount >= maxNoChange) {
+        console.log("Reached bottom of listings pane (no scroll height change).");
+        break;
+      }
+    } else {
+      noChangeCount = 0;
+      lastHeight = newHeight;
+    }
+
+    // Check for "Reached end of list" notification in feed
+    const textEls = feed.querySelectorAll('span, div');
+    let reachedEnd = false;
+    for (const el of textEls) {
+      if (el.children.length === 0 && el.innerText) {
+        const text = el.innerText.toLowerCase();
+        if (text.includes("reached the end of the list") || text.includes("no more results") || text.includes("you've reached the end")) {
+          reachedEnd = true;
+          break;
+        }
+      }
+    }
+    if (reachedEnd) {
+      console.log("Reached the end of Google Maps listings feed.");
+      break;
+    }
+  }
 }
 
 // Message Listener from Popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "scrapeCurrentPage") {
-    let results = [];
     const url = window.location.href;
+    const isMaps = url.includes("google.com/maps") || (url.includes("google.co") && url.includes("/maps"));
     
-    if (url.includes("google.com/maps") || url.includes("google.co") && url.includes("/maps")) {
-      results = scrapeGoogleMaps();
-    } else if (url.includes("google.com") || url.includes("google.co")) {
-      results = scrapeGoogleSearch();
-    } else {
-      // Generic fallback for any page (look for general addresses and phones)
-      results = [];
-    }
-    
-    // De-duplicate results by Name + Phone
-    const uniqueMap = new Map();
-    results.forEach(item => {
-      const key = `${item.name.toLowerCase()}_${item.phone.toLowerCase()}`;
-      if (!uniqueMap.has(key)) {
-        uniqueMap.set(key, item);
+    (async () => {
+      try {
+        if (request.autoScroll && isMaps) {
+          await autoScrollGoogleMaps(request.maxResults || 50);
+        }
+      } catch (err) {
+        console.error("Error during Maps auto-scroll:", err);
       }
-    });
-    
-    sendResponse({
-      listings: Array.from(uniqueMap.values()),
-      url: url,
-      title: document.title
-    });
+
+      let results = [];
+      if (isMaps) {
+        results = scrapeGoogleMaps();
+      } else if (url.includes("google.com") || url.includes("google.co")) {
+        results = scrapeGoogleSearch();
+      }
+
+      // De-duplicate results by Name + Phone
+      const uniqueMap = new Map();
+      results.forEach(item => {
+        const key = `${item.name.toLowerCase()}_${item.phone.toLowerCase()}`;
+        if (!uniqueMap.has(key)) {
+          uniqueMap.set(key, item);
+        }
+      });
+
+      sendResponse({
+        listings: Array.from(uniqueMap.values()),
+        url: url,
+        title: document.title
+      });
+    })();
+
+    return true; // Keep message port open for async response
   }
-  return true; // async channel keep open
 });

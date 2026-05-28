@@ -8,7 +8,8 @@
     "storage",
     "scripting",
     "contextMenus",
-    "notifications"
+    "notifications",
+    "sidePanel"
   ],
   "host_permissions": [
     "http://*/*",
@@ -20,9 +21,11 @@
     "128": "icon.png"
   },
   "action": {
-    "default_popup": "popup.html",
     "default_title": "LeadGen",
     "default_icon": "icon.png"
+  },
+  "side_panel": {
+    "default_path": "popup.html"
   },
   "background": {
     "service_worker": "background.js"

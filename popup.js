@@ -6,6 +6,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const tabViews = document.querySelectorAll(".tab-view");
   
   const btnScrape = document.getElementById("btn-scrape");
+  const btnScrapeText = document.getElementById("btn-scrape-text");
   const btnExportCsv = document.getElementById("btn-export-csv");
   const scrapeSpinner = document.getElementById("scrape-spinner");
   const leadsCount = document.getElementById("leads-count");
@@ -16,6 +17,9 @@ document.addEventListener("DOMContentLoaded", () => {
   const progressLabel = document.getElementById("progress-label");
   const progressPercentage = document.getElementById("progress-percentage");
   const progressBar = document.getElementById("progress-bar");
+
+  const chkAutoScroll = document.getElementById("chk-auto-scroll");
+  const numScrollLimit = document.getElementById("num-scroll-limit");
   
   const integrationForm = document.getElementById("integration-form");
   const settingsWebhook = document.getElementById("settings-webhook");
@@ -47,14 +51,24 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
-  // 2. Load Stored Integration Webhook
-  chrome.storage.local.get(["webhookUrl"], (result) => {
+  // 2. Load Stored Integration Webhook & Cached Leads
+  chrome.storage.local.get(["webhookUrl", "lastScrapedLeads"], (result) => {
     if (result.webhookUrl) {
       storedWebhookUrl = result.webhookUrl;
       settingsWebhook.value = storedWebhookUrl;
       updateWebhookStatus(true);
     } else {
       updateWebhookStatus(false);
+    }
+
+    if (result.lastScrapedLeads && result.lastScrapedLeads.length > 0) {
+      currentLeads = result.lastScrapedLeads;
+      leadsCount.textContent = currentLeads.length;
+      renderPreviewTable(currentLeads);
+      btnExportCsv.disabled = false;
+      if (storedWebhookUrl) {
+        btnPushN8N.disabled = false;
+      }
     }
   });
 
@@ -98,9 +112,14 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
 
+      // Read auto-scroll options
+      const autoScroll = chkAutoScroll.checked;
+      const maxResults = parseInt(numScrollLimit.value, 10) || 50;
+
       // Start UI Loading State
       btnScrape.disabled = true;
       scrapeSpinner.classList.remove("hidden");
+      btnScrapeText.textContent = autoScroll ? "Scrolling & Scraping..." : "Scraping page...";
 
       // Inject Content Script dynamically to ensure it runs
       chrome.scripting.executeScript({
@@ -109,52 +128,60 @@ document.addEventListener("DOMContentLoaded", () => {
       })
       .then(() => {
         // Send scrape request message
-        chrome.tabs.sendMessage(activeTab.id, { action: "scrapeCurrentPage" }, (response) => {
-          btnScrape.disabled = false;
-          scrapeSpinner.classList.add("hidden");
+        chrome.tabs.sendMessage(
+          activeTab.id, 
+          { action: "scrapeCurrentPage", autoScroll: autoScroll, maxResults: maxResults }, 
+          (response) => {
+            btnScrape.disabled = false;
+            scrapeSpinner.classList.add("hidden");
+            btnScrapeText.textContent = "Scrape Current Page";
 
-          if (chrome.runtime.lastError) {
-            console.error("Communication error:", chrome.runtime.lastError.message);
-            showToast("Scrape failed: Refresh page and try again.", "error");
-            return;
-          }
+            if (chrome.runtime.lastError) {
+              console.error("Communication error:", chrome.runtime.lastError.message);
+              showToast("Scrape failed: Refresh page and try again.", "error");
+              return;
+            }
 
-          if (response && response.listings) {
-            // Initialize leads with Email = N/A
-            currentLeads = response.listings.map(lead => ({
-              ...lead,
-              email: "N/A"
-            }));
-            leadsCount.textContent = currentLeads.length;
-            
-            // Render Table Preview
-            renderPreviewTable(currentLeads);
-            
-            if (currentLeads.length > 0) {
-              const hasWebsites = currentLeads.some(lead => lead.website && lead.website !== "N/A" && lead.website.trim() !== "");
+            if (response && response.listings) {
+              // Initialize leads with Email = N/A
+              currentLeads = response.listings.map(lead => ({
+                ...lead,
+                email: "N/A"
+              }));
+              leadsCount.textContent = currentLeads.length;
               
-              if (hasWebsites) {
-                // Launch deep website scraping
-                deepScrapeAllWebsites(currentLeads);
-              } else {
-                btnExportCsv.disabled = false;
-                if (storedWebhookUrl) {
-                  btnPushN8N.disabled = false;
+              // Render Table Preview
+              renderPreviewTable(currentLeads);
+              
+              if (currentLeads.length > 0) {
+                const hasWebsites = currentLeads.some(lead => lead.website && lead.website !== "N/A" && lead.website.trim() !== "");
+                
+                if (hasWebsites) {
+                  // Launch deep website scraping
+                  deepScrapeAllWebsites(currentLeads);
+                } else {
+                  // Save to storage cache immediately
+                  chrome.storage.local.set({ lastScrapedLeads: currentLeads });
+                  btnExportCsv.disabled = false;
+                  if (storedWebhookUrl) {
+                    btnPushN8N.disabled = false;
+                  }
+                  showToast(`Scraped ${currentLeads.length} leads (no websites to crawl).`, "success");
                 }
-                showToast(`Scraped ${currentLeads.length} leads (no websites to crawl).`, "success");
+              } else {
+                btnExportCsv.disabled = true;
+                btnPushN8N.disabled = true;
+                showToast("No listings detected on this page.", "error");
               }
-            } else {
-              btnExportCsv.disabled = true;
-              btnPushN8N.disabled = true;
-              showToast("No listings detected on this page.", "error");
             }
           }
-        });
+        );
       })
       .catch(err => {
         console.error("Execution injection error:", err);
         btnScrape.disabled = false;
         scrapeSpinner.classList.add("hidden");
+        btnScrapeText.textContent = "Scrape Current Page";
         showToast("Error scanning page content.", "error");
       });
     });
@@ -301,6 +328,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
     progressLabel.textContent = "Website scraping complete!";
     
+    // Save to storage cache
+    chrome.storage.local.set({ lastScrapedLeads: leads });
+
     // Enable export actions
     btnExportCsv.disabled = false;
     if (storedWebhookUrl) {

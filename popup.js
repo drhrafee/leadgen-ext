@@ -12,6 +12,11 @@ document.addEventListener("DOMContentLoaded", () => {
   
   const previewBody = document.getElementById("preview-body");
   
+  const progressContainer = document.getElementById("progress-container");
+  const progressLabel = document.getElementById("progress-label");
+  const progressPercentage = document.getElementById("progress-percentage");
+  const progressBar = document.getElementById("progress-bar");
+  
   const integrationForm = document.getElementById("integration-form");
   const settingsWebhook = document.getElementById("settings-webhook");
   const btnPushN8N = document.getElementById("btn-push-n8n");
@@ -115,18 +120,29 @@ document.addEventListener("DOMContentLoaded", () => {
           }
 
           if (response && response.listings) {
-            currentLeads = response.listings;
+            // Initialize leads with Email = N/A
+            currentLeads = response.listings.map(lead => ({
+              ...lead,
+              email: "N/A"
+            }));
             leadsCount.textContent = currentLeads.length;
             
             // Render Table Preview
             renderPreviewTable(currentLeads);
             
             if (currentLeads.length > 0) {
-              btnExportCsv.disabled = false;
-              if (storedWebhookUrl) {
-                btnPushN8N.disabled = false;
+              const hasWebsites = currentLeads.some(lead => lead.website && lead.website !== "N/A" && lead.website.trim() !== "");
+              
+              if (hasWebsites) {
+                // Launch deep website scraping
+                deepScrapeAllWebsites(currentLeads);
+              } else {
+                btnExportCsv.disabled = false;
+                if (storedWebhookUrl) {
+                  btnPushN8N.disabled = false;
+                }
+                showToast(`Scraped ${currentLeads.length} leads (no websites to crawl).`, "success");
               }
-              showToast(`Successfully extracted ${currentLeads.length} leads!`, "success");
             } else {
               btnExportCsv.disabled = true;
               btnPushN8N.disabled = true;
@@ -151,13 +167,14 @@ document.addEventListener("DOMContentLoaded", () => {
     if (listings.length === 0) {
       const row = document.createElement("tr");
       row.className = "empty-row";
-      row.innerHTML = `<td colspan="3">No leads scraped yet. Open Google Maps or Search results and click Scrape.</td>`;
+      row.innerHTML = `<td colspan="4">No leads scraped yet. Open Google Maps or Search results and click Scrape.</td>`;
       previewBody.appendChild(row);
       return;
     }
 
-    listings.forEach(lead => {
+    listings.forEach((lead, index) => {
       const row = document.createElement("tr");
+      row.setAttribute("data-index", index);
       
       const tdName = document.createElement("td");
       tdName.textContent = lead.name;
@@ -166,6 +183,11 @@ document.addEventListener("DOMContentLoaded", () => {
       const tdPhone = document.createElement("td");
       tdPhone.textContent = lead.phone;
       tdPhone.title = lead.phone;
+
+      const tdEmail = document.createElement("td");
+      tdEmail.textContent = lead.email || "N/A";
+      tdEmail.title = lead.email || "N/A";
+      tdEmail.className = "lead-email-cell";
       
       const tdWeb = document.createElement("td");
       tdWeb.textContent = lead.website;
@@ -173,9 +195,124 @@ document.addEventListener("DOMContentLoaded", () => {
       
       row.appendChild(tdName);
       row.appendChild(tdPhone);
+      row.appendChild(tdEmail);
       row.appendChild(tdWeb);
       previewBody.appendChild(row);
     });
+  }
+
+  // Update specific row cell in real time
+  function updatePreviewRow(index, email) {
+    const row = previewBody.querySelector(`tr[data-index="${index}"]`);
+    if (row) {
+      const emailCell = row.querySelector(".lead-email-cell");
+      if (emailCell) {
+        emailCell.textContent = email;
+        emailCell.title = email;
+      }
+    }
+  }
+
+  // Handle live progress bar updates
+  function updateProgressBar(current, total) {
+    const percent = total > 0 ? Math.round((current / total) * 100) : 0;
+    progressBar.style.width = `${percent}%`;
+    progressPercentage.textContent = `${percent}%`;
+    progressLabel.textContent = `Deep-scraping websites: ${current} of ${total}`;
+  }
+
+  // Parallel website scraping with concurrency pool
+  async function deepScrapeAllWebsites(leads) {
+    const scrapeQueue = [];
+    leads.forEach((lead, index) => {
+      if (lead.website && lead.website !== "N/A" && lead.website.trim() !== "") {
+        scrapeQueue.push({ lead, index });
+      }
+    });
+
+    if (scrapeQueue.length === 0) return;
+
+    // UI state updates
+    progressContainer.classList.remove("hidden");
+    updateProgressBar(0, scrapeQueue.length);
+
+    btnExportCsv.disabled = true;
+    btnPushN8N.disabled = true;
+    btnScrape.disabled = true;
+
+    const CONCURRENCY_LIMIT = 4;
+    let completedCount = 0;
+    const totalCount = scrapeQueue.length;
+
+    async function worker() {
+      while (scrapeQueue.length > 0) {
+        const item = scrapeQueue.shift();
+        if (!item) continue;
+
+        const { lead, index } = item;
+        try {
+          updatePreviewRow(index, "Scraping...");
+          
+          const result = await new Promise((resolve) => {
+            chrome.runtime.sendMessage(
+              { action: "scrapeWebsiteDetails", url: lead.website },
+              (res) => {
+                if (chrome.runtime.lastError) {
+                  console.warn("Background communication error:", chrome.runtime.lastError.message);
+                  resolve({ email: "N/A", socialMedia: "N/A" });
+                } else {
+                  resolve(res || { email: "N/A", socialMedia: "N/A" });
+                }
+              }
+            );
+          });
+
+          lead.email = result.email || "N/A";
+          
+          if (result.socialMedia && result.socialMedia !== "N/A") {
+            if (lead.socialMedia === "N/A") {
+              lead.socialMedia = result.socialMedia;
+            } else {
+              const merged = Array.from(new Set([
+                ...lead.socialMedia.split(", ").map(s => s.trim()),
+                ...result.socialMedia.split(", ").map(s => s.trim())
+              ])).join(", ");
+              lead.socialMedia = merged;
+            }
+          }
+
+          updatePreviewRow(index, lead.email);
+        } catch (err) {
+          console.error("Scraping queue error", index, err);
+          lead.email = "N/A";
+          updatePreviewRow(index, "N/A");
+        } finally {
+          completedCount++;
+          updateProgressBar(completedCount, totalCount);
+        }
+      }
+    }
+
+    const workers = [];
+    for (let i = 0; i < Math.min(CONCURRENCY_LIMIT, totalCount); i++) {
+      workers.push(worker());
+    }
+    await Promise.all(workers);
+
+    progressLabel.textContent = "Website scraping complete!";
+    
+    // Enable export actions
+    btnExportCsv.disabled = false;
+    if (storedWebhookUrl) {
+      btnPushN8N.disabled = false;
+    }
+    btnScrape.disabled = false;
+
+    showToast(`Scrape complete! Found emails for listings.`, "success");
+
+    setTimeout(() => {
+      progressContainer.classList.add("hidden");
+    }, 2000);
   }
 
   // 5. CSV Export and Download Helper
@@ -194,7 +331,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // CSV Headers
-    const headers = ["Name", "Location", "Google Maps Link", "Phone Number", "Website", "Social Media"];
+    const headers = ["Name", "Location", "Google Maps Link", "Phone Number", "Email", "Website", "Social Media"];
     
     // Build Rows
     const csvRows = [headers.join(",")];
@@ -204,6 +341,7 @@ document.addEventListener("DOMContentLoaded", () => {
         escapeCSV(lead.location),
         escapeCSV(lead.mapsLink),
         escapeCSV(lead.phone),
+        escapeCSV(lead.email),
         escapeCSV(lead.website),
         escapeCSV(lead.socialMedia)
       ];

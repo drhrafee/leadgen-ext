@@ -67,6 +67,17 @@
           <span id="leads-count" class="stats-number">0</span>
         </div>
 
+        <!-- Progress Indicator -->
+        <div id="progress-container" class="progress-container hidden">
+          <div class="progress-header">
+            <span id="progress-label" class="progress-label">Deep-scraping websites...</span>
+            <span id="progress-percentage" class="progress-percentage">0%</span>
+          </div>
+          <div class="progress-bar-wrapper">
+            <div id="progress-bar" class="progress-bar" style="width: 0%;"></div>
+          </div>
+        </div>
+
         <!-- Table Preview Area -->
         <div class="preview-section">
           <h3>Extracted Preview</h3>
@@ -76,12 +87,13 @@
                 <tr>
                   <th>Name</th>
                   <th>Phone</th>
+                  <th>Email</th>
                   <th>Website</th>
                 </tr>
               </thead>
               <tbody id="preview-body">
                 <tr class="empty-row">
-                  <td colspan="3">No leads scraped yet. Open Google Maps or Search results and click Scrape.</td>
+                  <td colspan="4">No leads scraped yet. Open Google Maps or Search results and click Scrape.</td>
                 </tr>
               </tbody>
             </table>

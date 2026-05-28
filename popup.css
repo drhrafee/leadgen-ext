@@ -450,3 +450,83 @@ input:focus {
 .table-wrapper::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.25);
 }
+
+/* --- Progress Indicator --- */
+.progress-container {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  padding: 12px;
+  border-radius: 10px;
+  margin-bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: var(--shadow-sm);
+  position: relative;
+  overflow: hidden;
+}
+
+.progress-container::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(56, 189, 248, 0.3), transparent);
+}
+
+.progress-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+}
+
+.progress-label {
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.progress-percentage {
+  font-weight: 700;
+  color: #38bdf8;
+  letter-spacing: 0.5px;
+}
+
+.progress-bar-wrapper {
+  height: 6px;
+  width: 100%;
+  background-color: rgba(255, 255, 255, 0.05);
+  border-radius: 3px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.02);
+}
+
+.progress-bar {
+  height: 100%;
+  background: var(--primary-gradient);
+  border-radius: 3px;
+  width: 0%;
+  transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.4);
+}
+
+/* --- Table Width Adjustments for 4 Columns --- */
+#preview-table th:nth-child(1), #preview-table td:nth-child(1) {
+  width: 25%;
+  max-width: 90px;
+}
+#preview-table th:nth-child(2), #preview-table td:nth-child(2) {
+  width: 22%;
+  max-width: 80px;
+}
+#preview-table th:nth-child(3), #preview-table td:nth-child(3) {
+  width: 28%;
+  max-width: 100px;
+}
+#preview-table th:nth-child(4), #preview-table td:nth-child(4) {
+  width: 25%;
+  max-width: 90px;
+}
+

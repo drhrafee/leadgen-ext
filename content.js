@@ -302,6 +302,11 @@ function scrapeGoogleSearch() {
         socialMedia: "N/A"
       });
     });
+  }
+  
+  return listings;
+}
+
 // Helper to auto-scroll Google Maps listings feed to load more listings
 async function autoScrollGoogleMaps(maxResults = 50) {
   console.log(`Auto-scrolling Google Maps feed up to ${maxResults} results...`);

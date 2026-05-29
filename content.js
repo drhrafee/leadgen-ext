@@ -28,7 +28,9 @@ function getExternalWebsite(href, element) {
     if (target.startsWith("/url?") || target.includes("google.com/url?")) {
       try {
         const parsedUrl = new URL(target, window.location.origin);
-        const qParam = parsedUrl.searchParams.get("q");
+        const qParam = parsedUrl.searchParams.get("q") || 
+                       parsedUrl.searchParams.get("url") || 
+                       parsedUrl.searchParams.get("adurl");
         if (qParam) {
           target = qParam;
         }
@@ -241,6 +243,27 @@ function parseDetailsFromCard(searchArea, businessName) {
   return { phone, location };
 }
 
+// Helper to find the outer listing container containing links and tel elements
+function findListingContainer(card, doc) {
+  let el = card;
+  for (let i = 0; i < 4; i++) {
+    if (!el || el === doc.body || el.tagName === 'BODY') break;
+    const links = el.querySelectorAll('a');
+    let hasLinks = false;
+    for (const link of links) {
+      const href = link.getAttribute('href') || link.getAttribute('data-href');
+      if (href) {
+        if (href.startsWith('tel:')) { hasLinks = true; break; }
+        const ext = getExternalWebsite(href, link);
+        if (ext && !ext.includes("google.com") && !ext.includes("google.co")) { hasLinks = true; break; }
+      }
+    }
+    if (hasLinks) return el;
+    el = el.parentElement;
+  }
+  return card.parentElement || card;
+}
+
 // 1. Google Maps Scraper
 function scrapeGoogleMaps() {
   const listings = [];
@@ -331,10 +354,7 @@ function scrapeGoogleSearch() {
     if (!name) return;
     
     // Find the full listing container that contains both details and buttons
-    let parentCard = card;
-    if (card.classList.contains('rllt__details')) {
-      parentCard = card.parentElement || card;
-    }
+    const parentCard = findListingContainer(card, document);
 
     let mapsLink = "N/A";
     const mapsEl = parentCard.querySelector('a[href*="google.com/maps"], a[href*="maps.google.com"]');
@@ -538,6 +558,207 @@ async function autoScrollGoogleMapsIncremental(maxResults = 50, progressCallback
   progressCallback(true);
 }
 
+// Helper to parse business listings from a custom HTML string
+function scrapeFromHtmlString(htmlContent) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(htmlContent, 'text/html');
+  const listings = [];
+  const cards = doc.querySelectorAll('div[data-cid], .C8nzq, .rllt__details');
+  
+  cards.forEach(card => {
+    let nameEl = card.querySelector('.dbg0pd, .OSrXXb, h3[role="heading"]');
+    let name = nameEl ? nameEl.innerText.trim() : "";
+    if (!name) return;
+    
+    // Find the full listing container that contains both details and buttons
+    const parentCard = findListingContainer(card, doc);
+
+    let mapsLink = "N/A";
+    const mapsEl = parentCard.querySelector('a[href*="google.com/maps"], a[href*="maps.google.com"]');
+    if (mapsEl) {
+      mapsLink = mapsEl.getAttribute('href');
+    } else {
+      mapsLink = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(name)}`;
+    }
+    
+    let website = "N/A";
+    let socialMedia = "N/A";
+    const links = parentCard.querySelectorAll('a');
+    links.forEach(link => {
+      const href = link.getAttribute('href') || link.getAttribute('data-href');
+      const extWeb = getExternalWebsite(href, link);
+      if (extWeb) {
+        const social = getSocialMediaLink(extWeb);
+        if (social) {
+          socialMedia = social;
+        } else {
+          const isAclk = extWeb.includes("aclk") || extWeb.includes("googleadservices.com");
+          const currentIsAclk = website.includes("aclk") || website.includes("googleadservices.com") || website === "N/A";
+          if (currentIsAclk || !isAclk) {
+            website = extWeb;
+          }
+        }
+      }
+    });
+
+    if (website === "N/A") {
+      const webBtn = parentCard.querySelector('a[aria-label*="Website"], a.yYVVDd, [data-href*="http"]');
+      if (webBtn) {
+        const href = webBtn.getAttribute('href') || webBtn.getAttribute('data-href');
+        const extWeb = getExternalWebsite(href, webBtn);
+        if (extWeb) website = extWeb;
+      }
+    }
+    
+    // Parse phone and location using bullet-split helper
+    const details = parseDetailsFromCard(parentCard, name);
+    
+    listings.push({
+      name: name,
+      location: details.location,
+      mapsLink: mapsLink,
+      phone: details.phone,
+      website: website,
+      socialMedia: socialMedia
+    });
+  });
+  
+  // Fallback local pack parser
+  if (listings.length === 0) {
+    const localPackHeaders = doc.querySelectorAll('div.Vk5nOf h3');
+    localPackHeaders.forEach(header => {
+      const name = header.innerText.trim();
+      const parent = header.closest('div.Vk5nOf') || header.parentElement;
+      if (!name || !parent) return;
+
+      let website = "N/A";
+      let mapsLink = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(name)}`;
+      
+      const link = parent.querySelector('a');
+      if (link) {
+        const href = link.getAttribute('href');
+        const ext = getExternalWebsite(href, link);
+        if (ext) website = ext;
+      }
+
+      const details = parseDetailsFromCard(parent, name);
+
+      listings.push({
+        name: name,
+        location: details.location,
+        mapsLink: mapsLink,
+        phone: details.phone,
+        website: website,
+        socialMedia: "N/A"
+      });
+    });
+  }
+  
+  return listings;
+}
+
+// Extract search query from current page URL or titles
+function getSearchQuery() {
+  const url = window.location.href;
+  if (url.includes("google.com/maps") || (url.includes("google.co") && url.includes("/maps"))) {
+    const match = url.match(/\/maps\/search\/([^\/\?@]+)/);
+    if (match && match[1]) {
+      return decodeURIComponent(match[1].replace(/\+/g, " "));
+    }
+  } else {
+    try {
+      const parsedUrl = new URL(url);
+      const q = parsedUrl.searchParams.get("q");
+      if (q) return q;
+    } catch (e) {}
+  }
+  
+  // Fallback 1: Page title
+  const title = document.title;
+  if (title.includes("- Google Maps")) {
+    return title.split("- Google Maps")[0].trim();
+  }
+  if (title.includes("- Google Search")) {
+    return title.split("- Google Search")[0].trim();
+  }
+  
+  // Fallback 2: Search inputs
+  const searchInput = document.querySelector('input[name="q"], #searchboxinput');
+  if (searchInput && searchInput.value) {
+    return searchInput.value;
+  }
+  
+  return null;
+}
+
+// Backend (No-Scroll) Scraper using Google Search Local Finder (tbm=lcl)
+async function scrapeSearchInBackend(query, maxResults = 50, progressCallback) {
+  console.log(`Scraping in backend for query: "${query}" up to ${maxResults} results...`);
+  
+  let currentStart = 0;
+  let noResultsCount = 0;
+  let totalScraped = 0;
+  const uniqueMap = new Map();
+  
+  while (totalScraped < maxResults) {
+    if (shouldStopScraping) {
+      console.log("Backend scraping stopped by user.");
+      break;
+    }
+    
+    const url = `https://www.google.com/search?tbm=lcl&q=${encodeURIComponent(query)}&start=${currentStart}`;
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 6000); // 6s timeout
+      
+      const response = await fetch(url, {
+        signal: controller.signal,
+        headers: {
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.0.0 Safari/537.36"
+        }
+      });
+      clearTimeout(timeoutId);
+      
+      if (!response.ok) {
+        console.error(`HTTP error: ${response.status}`);
+        break;
+      }
+      
+      const html = await response.text();
+      const listings = scrapeFromHtmlString(html);
+      
+      if (listings.length === 0) {
+        noResultsCount++;
+        if (noResultsCount >= 2) {
+          console.log("No more listings found in backend search results.");
+          break;
+        }
+      } else {
+        noResultsCount = 0;
+        
+        listings.forEach(item => {
+          const key = `${item.name.toLowerCase()}_${item.phone.toLowerCase()}`;
+          if (!uniqueMap.has(key)) {
+            uniqueMap.set(key, item);
+          }
+        });
+        
+        totalScraped = uniqueMap.size;
+        progressCallback(Array.from(uniqueMap.values()), false);
+      }
+      
+      currentStart += 20;
+      await new Promise(resolve => setTimeout(resolve, 300));
+    } catch (err) {
+      console.error("Backend scrape error at start", currentStart, err);
+      break;
+    }
+  }
+  
+  progressCallback(Array.from(uniqueMap.values()), true);
+}
+
 // Message Listener from Popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "stopScraping") {
@@ -598,12 +819,48 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         });
       };
 
-      if (request.autoScroll && isMaps) {
-        try {
-          await autoScrollGoogleMapsIncremental(request.maxResults || 50, scrapeAndSendUpdate);
-        } catch (err) {
-          console.error("Error during Maps auto-scroll:", err);
-          scrapeAndSendUpdate(true); // Fallback to send whatever we have
+      if (request.autoScroll) {
+        const query = getSearchQuery();
+        if (query) {
+          try {
+            await scrapeSearchInBackend(query, request.maxResults || 50, (listings, isComplete) => {
+              listings.forEach(item => {
+                const key = `${item.name.toLowerCase()}_${item.phone.toLowerCase()}`;
+                if (!uniqueMap.has(key)) {
+                  uniqueMap.set(key, item);
+                }
+              });
+
+              uniqueListings = Array.from(uniqueMap.values());
+
+              chrome.storage.local.set({ lastScrapedLeads: uniqueListings.map(lead => ({ ...lead, email: "N/A" })) }, () => {
+                chrome.runtime.sendMessage({
+                  action: isComplete ? "scrapingComplete" : "scrapingProgress",
+                  listings: uniqueListings,
+                  url: url,
+                  title: document.title
+                }, (response) => {
+                  if (chrome.runtime.lastError) {
+                    // Benign
+                  }
+                });
+              });
+            });
+          } catch (err) {
+            console.error("Error during backend scrape, falling back to UI auto-scroll:", err);
+            if (isMaps) {
+              await autoScrollGoogleMapsIncremental(request.maxResults || 50, scrapeAndSendUpdate);
+            } else {
+              scrapeAndSendUpdate(true);
+            }
+          }
+        } else {
+          // Fallback to UI auto-scroll if query not extracted
+          if (isMaps) {
+            await autoScrollGoogleMapsIncremental(request.maxResults || 50, scrapeAndSendUpdate);
+          } else {
+            scrapeAndSendUpdate(true);
+          }
         }
       } else {
         // Just scrape once

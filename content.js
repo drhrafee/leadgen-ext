@@ -485,16 +485,15 @@ async function autoScrollGoogleMapsIncremental(maxResults = 50, progressCallback
       lastHeight = newHeight;
     }
 
-    // Check for "Reached end of list" notification in feed
-    const textEls = feed.querySelectorAll('span, div');
+    // Check for "Reached end of list" or "Back to top" button
     let reachedEnd = false;
-    for (const el of textEls) {
-      if (el.children.length === 0 && el.innerText) {
-        const text = el.innerText.toLowerCase();
-        if (text.includes("reached the end of the list") || text.includes("no more results") || text.includes("you've reached the end")) {
-          reachedEnd = true;
-          break;
-        }
+    const endTextQuery = ["reached the end of the list", "no more results", "you've reached the end", "back to top"];
+    const allEls = feed.querySelectorAll('span, div, button');
+    for (const el of allEls) {
+      const text = (el.innerText || el.textContent || "").toLowerCase().trim();
+      if (endTextQuery.some(q => text.includes(q))) {
+        reachedEnd = true;
+        break;
       }
     }
     if (reachedEnd) {

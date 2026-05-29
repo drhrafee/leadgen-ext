@@ -159,6 +159,22 @@ function getAddressScore(part, businessName) {
   return score;
 }
 
+// Helper to extract phone numbers from strings using patterns
+function extractPhoneNumber(str) {
+  const generalPhoneRegex = /(?:\+?\d{1,4}[-.\s]?)?\(?\d{2,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{3,5}\b/g;
+  const cleanStr = str.replace(/[·•|]/g, ' ').trim();
+  const matches = cleanStr.match(generalPhoneRegex);
+  if (matches) {
+    for (const match of matches) {
+      const digits = match.replace(/[\s\-\(\)\+]/g, '');
+      if (digits.length >= 7 && digits.length <= 15) {
+        return match.trim();
+      }
+    }
+  }
+  return null;
+}
+
 // Helper to extract phone and location details from a card's inner text elements
 function parseDetailsFromCard(searchArea, businessName) {
   const textEls = searchArea.querySelectorAll('span, div');
@@ -168,28 +184,39 @@ function parseDetailsFromCard(searchArea, businessName) {
     const textVal = (el.innerText || el.textContent || "").trim().replace(/[\r\n]+/g, ', ');
     // Get text of leaf elements to avoid duplicates from nested containers
     if (el.children.length === 0 && textVal) {
-      // Split on bullet characters commonly used as delimiters on Google Maps & Search
-      if (textVal.includes('·')) {
-        textVal.split('·').forEach(part => rawParts.push(part.trim()));
-      } else {
-        rawParts.push(textVal);
-      }
+      // Split on common bullet/divider characters
+      const parts = textVal.split(/[·•|]/);
+      parts.forEach(part => {
+        const trimmed = part.trim();
+        if (trimmed) rawParts.push(trimmed);
+      });
     }
   });
 
   let phone = "N/A";
+  
+  // First, check if there is an explicit tel link
+  const telLink = searchArea.querySelector('a[href^="tel:"]');
+  if (telLink) {
+    const href = telLink.getAttribute('href');
+    phone = href.replace('tel:', '').trim();
+  }
+
   let addressCandidates = [];
 
   rawParts.forEach(part => {
     if (!part) return;
     
-    if (isPhoneNumber(part)) {
-      if (phone === "N/A") {
-        phone = part;
+    // Try to extract phone if we don't have one yet
+    if (phone === "N/A") {
+      const extractedPhone = extractPhoneNumber(part);
+      if (extractedPhone) {
+        phone = extractedPhone;
+        return; // skip adding to address candidates
       }
-    } else {
-      addressCandidates.push(part);
     }
+    
+    addressCandidates.push(part);
   });
 
   let location = "N/A";
@@ -303,8 +330,14 @@ function scrapeGoogleSearch() {
     let name = nameEl ? nameEl.innerText.trim() : "";
     if (!name) return;
     
+    // Find the full listing container that contains both details and buttons
+    let parentCard = card;
+    if (card.classList.contains('rllt__details')) {
+      parentCard = card.parentElement || card;
+    }
+
     let mapsLink = "N/A";
-    const mapsEl = card.querySelector('a[href*="google.com/maps"], a[href*="maps.google.com"]');
+    const mapsEl = parentCard.querySelector('a[href*="google.com/maps"], a[href*="maps.google.com"]');
     if (mapsEl) {
       mapsLink = mapsEl.getAttribute('href');
     } else {
@@ -313,9 +346,9 @@ function scrapeGoogleSearch() {
     
     let website = "N/A";
     let socialMedia = "N/A";
-    const links = card.querySelectorAll('a');
+    const links = parentCard.querySelectorAll('a');
     links.forEach(link => {
-      const href = link.getAttribute('href');
+      const href = link.getAttribute('href') || link.getAttribute('data-href');
       const extWeb = getExternalWebsite(href, link);
       if (extWeb) {
         const social = getSocialMediaLink(extWeb);
@@ -332,16 +365,16 @@ function scrapeGoogleSearch() {
     });
 
     if (website === "N/A") {
-      const webBtn = card.querySelector('a[aria-label*="Website"], a.yYVVDd');
+      const webBtn = parentCard.querySelector('a[aria-label*="Website"], a.yYVVDd, [data-href*="http"]');
       if (webBtn) {
-        const href = webBtn.getAttribute('href');
+        const href = webBtn.getAttribute('href') || webBtn.getAttribute('data-href');
         const extWeb = getExternalWebsite(href, webBtn);
         if (extWeb) website = extWeb;
       }
     }
     
     // Parse phone and location using bullet-split helper
-    const details = parseDetailsFromCard(card, name);
+    const details = parseDetailsFromCard(parentCard, name);
     
     listings.push({
       name: name,
@@ -517,8 +550,14 @@ function scrapeFromHtmlString(htmlContent) {
     let name = nameEl ? nameEl.innerText.trim() : "";
     if (!name) return;
     
+    // Find the full listing container that contains both details and buttons
+    let parentCard = card;
+    if (card.classList.contains('rllt__details')) {
+      parentCard = card.parentElement || card;
+    }
+
     let mapsLink = "N/A";
-    const mapsEl = card.querySelector('a[href*="google.com/maps"], a[href*="maps.google.com"]');
+    const mapsEl = parentCard.querySelector('a[href*="google.com/maps"], a[href*="maps.google.com"]');
     if (mapsEl) {
       mapsLink = mapsEl.getAttribute('href');
     } else {
@@ -527,9 +566,9 @@ function scrapeFromHtmlString(htmlContent) {
     
     let website = "N/A";
     let socialMedia = "N/A";
-    const links = card.querySelectorAll('a');
+    const links = parentCard.querySelectorAll('a');
     links.forEach(link => {
-      const href = link.getAttribute('href');
+      const href = link.getAttribute('href') || link.getAttribute('data-href');
       const extWeb = getExternalWebsite(href, link);
       if (extWeb) {
         const social = getSocialMediaLink(extWeb);
@@ -546,16 +585,16 @@ function scrapeFromHtmlString(htmlContent) {
     });
 
     if (website === "N/A") {
-      const webBtn = card.querySelector('a[aria-label*="Website"], a.yYVVDd');
+      const webBtn = parentCard.querySelector('a[aria-label*="Website"], a.yYVVDd, [data-href*="http"]');
       if (webBtn) {
-        const href = webBtn.getAttribute('href');
+        const href = webBtn.getAttribute('href') || webBtn.getAttribute('data-href');
         const extWeb = getExternalWebsite(href, webBtn);
         if (extWeb) website = extWeb;
       }
     }
     
     // Parse phone and location using bullet-split helper
-    const details = parseDetailsFromCard(card, name);
+    const details = parseDetailsFromCard(parentCard, name);
     
     listings.push({
       name: name,

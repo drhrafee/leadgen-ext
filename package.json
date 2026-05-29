@@ -1,5 +1,5 @@
 {
-  "name": "n8n-leadgen-ext",
+  "name": "n8n-leadiction-ext",
   "version": "1.0.0",
   "description": "Chrome Extension for Lead Generation with n8n",
   "main": "background.js",
@@ -12,7 +12,7 @@
   "keywords": [
     "chrome-extension",
     "n8n",
-    "leadgen"
+    "leadiction"
   ],
   "author": "",
   "license": "ISC"

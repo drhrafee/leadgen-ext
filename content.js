@@ -1,5 +1,11 @@
 // content.js - Scrapes business listings from Google Maps and Google Search pages.
 
+(() => {
+  if (window.hasLeadictionContentScriptInjected) {
+    return;
+  }
+  window.hasLeadictionContentScriptInjected = true;
+
 // Helper to check if a string looks like a phone number
 function isPhoneNumber(str) {
   // Strip spaces, dashes, parentheses, and plus signs
@@ -9,24 +15,75 @@ function isPhoneNumber(str) {
 }
 
 // Helper to clean external website links (ignoring Google internal domains)
-function getExternalWebsite(href) {
-  if (!href) return null;
+function getExternalWebsite(href, element) {
+  let target = href;
+  if (element) {
+    target = element.getAttribute('data-adurl') || element.getAttribute('data-url') || target;
+  }
+  if (!target) return null;
   try {
-    const url = new URL(href);
+    target = target.trim();
+    
+    // Resolve Google Search redirect URLs (e.g. /url?q=https://example.com)
+    if (target.startsWith("/url?") || target.includes("google.com/url?")) {
+      try {
+        const parsedUrl = new URL(target, window.location.origin);
+        const qParam = parsedUrl.searchParams.get("q");
+        if (qParam) {
+          target = qParam;
+        }
+      } catch (e) {}
+    }
+    
+    // Resolve Google Ad redirect URLs (e.g. /aclk?adurl=https://example.com)
+    if (target.includes("aclk") || target.includes("googleadservices.com")) {
+      try {
+        const parsedUrl = new URL(target, window.location.origin);
+        const adParam = parsedUrl.searchParams.get("adurl") || 
+                        parsedUrl.searchParams.get("q") || 
+                        parsedUrl.searchParams.get("url");
+        if (adParam) {
+          target = adParam;
+        } else {
+          // If we couldn't find the target parameter in the query, return the absolute aclk URL
+          // so that background.js can resolve the redirect.
+          return parsedUrl.href;
+        }
+      } catch (e) {
+        try {
+          return new URL(target, window.location.origin).href;
+        } catch (err) {
+          return target;
+        }
+      }
+    }
+
+    if (!/^https?:\/\//i.test(target)) {
+      target = "https://" + target;
+    }
+    const url = new URL(target);
     const domain = url.hostname.toLowerCase();
     if (
       domain.includes("google.com") ||
       domain.includes("google.co") ||
+      domain.includes("googleadservices.com") ||
       domain.includes("gstatic.com") ||
       domain.includes("ggpht.com") ||
       domain.includes("youtube.com") ||
       domain.includes("wikipedia.org") ||
-      href.startsWith("chrome-extension://") ||
-      href.startsWith("javascript:")
+      target.startsWith("chrome-extension://") ||
+      target.startsWith("javascript:")
     ) {
       return null;
     }
-    return href;
+    
+    // If it's a social media link, return the full target URL
+    if (getSocialMediaLink(target)) {
+      return target;
+    }
+    
+    // Otherwise, return only the homepage (origin)
+    return url.origin;
   } catch (e) {
     return null;
   }
@@ -51,6 +108,15 @@ function getAddressScore(part, businessName) {
   const partLower = part.toLowerCase().trim();
   
   if (!partLower) return -100;
+  
+  // Exclude opening hours, schedules, or status terms
+  const isSchedule = /(?:^|\s|·)(?:open|closed|closes|opens|24\s*hours|24\/7|hours)(?:\s|$|·)/i.test(partLower) ||
+                     /\b\d{1,2}(?:\s*am|\s*pm)\b/i.test(partLower) ||
+                     /\d{1,2}–\d{1,2}/.test(partLower) ||
+                     /^(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)$/i.test(partLower);
+  if (isSchedule) {
+    return -100;
+  }
   
   // If the part is exactly the name or contains the name, it's not the address
   if (businessName) {
@@ -157,19 +223,26 @@ function scrapeGoogleMaps() {
   const links = document.querySelectorAll('a[href*="/maps/place/"]');
   
   links.forEach(link => {
-    let card = link.closest('div[role="feed"] > div');
-    if (!card) {
-      let parent = link.parentElement;
-      for (let i = 0; i < 5 && parent; i++) {
-        if (parent.querySelector('.lvyw2d') || parent.querySelector('a[data-value="Website"]')) {
-          card = parent;
-          break;
+    // Traverse up to find the container that belongs ONLY to this listing
+    let card = link.parentElement;
+    let bestCard = card;
+    while (card && card !== document.body) {
+      const listingLinks = card.querySelectorAll('a[href*="/maps/place/"]');
+      const uniqueHrefs = new Set();
+      listingLinks.forEach(l => {
+        const href = l.getAttribute('href');
+        if (href) {
+          const baseHref = href.split('/@')[0];
+          uniqueHrefs.add(baseHref);
         }
-        parent = parent.parentElement;
+      });
+      if (uniqueHrefs.size > 1) {
+        break;
       }
+      bestCard = card;
+      card = card.parentElement;
     }
-    
-    const searchArea = card || link.parentElement || link;
+    const searchArea = bestCard || link;
     
     // Name
     let name = link.getAttribute('aria-label') || link.innerText || "";
@@ -189,13 +262,17 @@ function scrapeGoogleMaps() {
     const cardLinks = searchArea.querySelectorAll('a');
     cardLinks.forEach(cl => {
       const href = cl.getAttribute('href');
-      const extWeb = getExternalWebsite(href);
+      const extWeb = getExternalWebsite(href, cl);
       if (extWeb) {
         const social = getSocialMediaLink(extWeb);
         if (social) {
           socialMedia = social;
         } else {
-          website = extWeb;
+          const isAclk = extWeb.includes("aclk") || extWeb.includes("googleadservices.com");
+          const currentIsAclk = website.includes("aclk") || website.includes("googleadservices.com") || website === "N/A";
+          if (currentIsAclk || !isAclk) {
+            website = extWeb;
+          }
         }
       }
     });
@@ -240,13 +317,17 @@ function scrapeGoogleSearch() {
     const links = card.querySelectorAll('a');
     links.forEach(link => {
       const href = link.getAttribute('href');
-      const extWeb = getExternalWebsite(href);
+      const extWeb = getExternalWebsite(href, link);
       if (extWeb) {
         const social = getSocialMediaLink(extWeb);
         if (social) {
           socialMedia = social;
         } else {
-          website = extWeb;
+          const isAclk = extWeb.includes("aclk") || extWeb.includes("googleadservices.com");
+          const currentIsAclk = website.includes("aclk") || website.includes("googleadservices.com") || website === "N/A";
+          if (currentIsAclk || !isAclk) {
+            website = extWeb;
+          }
         }
       }
     });
@@ -255,7 +336,7 @@ function scrapeGoogleSearch() {
       const webBtn = card.querySelector('a[aria-label*="Website"], a.yYVVDd');
       if (webBtn) {
         const href = webBtn.getAttribute('href');
-        const extWeb = getExternalWebsite(href);
+        const extWeb = getExternalWebsite(href, webBtn);
         if (extWeb) website = extWeb;
       }
     }
@@ -287,7 +368,7 @@ function scrapeGoogleSearch() {
       const link = parent.querySelector('a');
       if (link) {
         const href = link.getAttribute('href');
-        const ext = getExternalWebsite(href);
+        const ext = getExternalWebsite(href, link);
         if (ext) website = ext;
       }
 
@@ -307,13 +388,46 @@ function scrapeGoogleSearch() {
   return listings;
 }
 
-// Helper to auto-scroll Google Maps listings feed to load more listings
-async function autoScrollGoogleMaps(maxResults = 50) {
-  console.log(`Auto-scrolling Google Maps feed up to ${maxResults} results...`);
+// Robust helper to locate the scrollable feed container on Google Maps
+function findMapsFeedContainer() {
+  // 1. Try standard role="feed"
+  let feed = document.querySelector('div[role="feed"]');
+  if (feed) return feed;
+
+  // 2. Traverse up from a listing link to find a scrollable parent
+  const firstLink = document.querySelector('a[href*="/maps/place/"]');
+  if (firstLink) {
+    let parent = firstLink.parentElement;
+    while (parent && parent !== document.body) {
+      const style = window.getComputedStyle(parent);
+      const overflow = style.getPropertyValue('overflow-y') || style.getPropertyValue('overflow');
+      if (overflow.includes('auto') || overflow.includes('scroll')) {
+        return parent;
+      }
+      if (parent.classList.contains('m67p50') || parent.classList.contains('ecr1z')) {
+        return parent;
+      }
+      parent = parent.parentElement;
+    }
+  }
   
-  const feed = document.querySelector('div[role="feed"]');
+  // 3. Fallback class selectors
+  return document.querySelector('.m67p50, .ecr1z, .Gpq6kf');
+}
+
+let shouldStopScraping = false;
+
+// Helper to auto-scroll Google Maps listings feed to load more listings, scraping incrementally
+async function autoScrollGoogleMapsIncremental(maxResults = 50, progressCallback) {
+  console.log(`Auto-scrolling Google Maps feed up to ${maxResults} results incrementally...`);
+  
+  const feed = findMapsFeedContainer();
   if (!feed) {
-    console.warn("Could not find scrollable feed pane (div[role='feed'])");
+    const links = document.querySelectorAll('a[href*="/maps/place/"]');
+    if (links.length > 1) {
+      console.warn("Could not find scrollable feed pane");
+    }
+    progressCallback(true);
     return;
   }
 
@@ -322,17 +436,42 @@ async function autoScrollGoogleMaps(maxResults = 50) {
   const maxNoChange = 6; // Stop if scroll height doesn't change after 6 scroll checks (~9s)
   
   while (true) {
+    if (shouldStopScraping) {
+      console.log("Auto-scroll stopped by user command.");
+      break;
+    }
+
     const links = feed.querySelectorAll('a[href*="/maps/place/"]');
+    
+    // Scrape current listings and notify progress
+    progressCallback(false);
+
     if (links.length >= maxResults) {
       console.log(`Loaded ${links.length} listings. Reached requested limit of ${maxResults}.`);
       break;
     }
 
+    const startCount = feed.querySelectorAll('a[href*="/maps/place/"]').length;
+    const startHeight = feed.scrollHeight;
+
     // Scroll container to bottom
     feed.scrollTo(0, feed.scrollHeight);
     
-    // Wait for DOM items to load (1.5 seconds)
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    // Wait dynamically up to 1.5 seconds for either new links or a height change
+    let elapsed = 0;
+    const checkInterval = 100;
+    const maxWait = 1500;
+    while (elapsed < maxWait) {
+      if (shouldStopScraping) break;
+      await new Promise(resolve => setTimeout(resolve, checkInterval));
+      elapsed += checkInterval;
+      
+      const currentCount = feed.querySelectorAll('a[href*="/maps/place/"]').length;
+      const currentHeight = feed.scrollHeight;
+      if (currentCount > startCount || currentHeight > startHeight) {
+        break; // new items loaded! proceed to next scroll
+      }
+    }
     
     const newHeight = feed.scrollHeight;
     if (newHeight === lastHeight) {
@@ -363,46 +502,87 @@ async function autoScrollGoogleMaps(maxResults = 50) {
       break;
     }
   }
+
+  // Final complete scrape
+  progressCallback(true);
 }
 
 // Message Listener from Popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === "stopScraping") {
+    shouldStopScraping = true;
+    sendResponse({ status: "stopping" });
+    return false;
+  }
+
   if (request.action === "scrapeCurrentPage") {
     const url = window.location.href;
     const isMaps = url.includes("google.com/maps") || (url.includes("google.co") && url.includes("/maps"));
     
+    shouldStopScraping = false;
+
+    // Respond immediately to prevent message channel timeout
+    sendResponse({ status: "started" });
+
     (async () => {
-      try {
-        if (request.autoScroll && isMaps) {
-          await autoScrollGoogleMaps(request.maxResults || 50);
-        }
-      } catch (err) {
-        console.error("Error during Maps auto-scroll:", err);
-      }
-
-      let results = [];
-      if (isMaps) {
-        results = scrapeGoogleMaps();
-      } else if (url.includes("google.com") || url.includes("google.co")) {
-        results = scrapeGoogleSearch();
-      }
-
-      // De-duplicate results by Name + Phone
+      let uniqueListings = [];
       const uniqueMap = new Map();
-      results.forEach(item => {
-        const key = `${item.name.toLowerCase()}_${item.phone.toLowerCase()}`;
-        if (!uniqueMap.has(key)) {
-          uniqueMap.set(key, item);
-        }
-      });
 
-      sendResponse({
-        listings: Array.from(uniqueMap.values()),
-        url: url,
-        title: document.title
-      });
+      // Helper to scrape, deduplicate and send update
+      const scrapeAndSendUpdate = (isComplete = false) => {
+        let results = [];
+        try {
+          if (isMaps) {
+            results = scrapeGoogleMaps();
+          } else if (url.includes("google.com") || url.includes("google.co")) {
+            results = scrapeGoogleSearch();
+          }
+        } catch (err) {
+          console.error("Error scraping page:", err);
+        }
+
+        // De-duplicate results by Name + Phone
+        results.forEach(item => {
+          const key = `${item.name.toLowerCase()}_${item.phone.toLowerCase()}`;
+          if (!uniqueMap.has(key)) {
+            uniqueMap.set(key, item);
+          }
+        });
+
+        uniqueListings = Array.from(uniqueMap.values());
+
+        // Save to storage cache immediately
+        chrome.storage.local.set({ lastScrapedLeads: uniqueListings.map(lead => ({ ...lead, email: "N/A" })) }, () => {
+          // Send update message back to popup
+          chrome.runtime.sendMessage({
+            action: isComplete ? "scrapingComplete" : "scrapingProgress",
+            listings: uniqueListings,
+            url: url,
+            title: document.title
+          }, (response) => {
+            // Silence warning if popup is closed
+            if (chrome.runtime.lastError) {
+              // Benign
+            }
+          });
+        });
+      };
+
+      if (request.autoScroll && isMaps) {
+        try {
+          await autoScrollGoogleMapsIncremental(request.maxResults || 50, scrapeAndSendUpdate);
+        } catch (err) {
+          console.error("Error during Maps auto-scroll:", err);
+          scrapeAndSendUpdate(true); // Fallback to send whatever we have
+        }
+      } else {
+        // Just scrape once
+        scrapeAndSendUpdate(true);
+      }
     })();
 
-    return true; // Keep message port open for async response
+    return false; // Return false since response is already sent synchronously
   }
 });
+
+})();
